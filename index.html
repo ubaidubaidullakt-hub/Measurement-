@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Neon AI 3D Measurement — Single File</title>
+
+<!-- TensorFlow.js -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.12.0/dist/tf.min.js"></script>
+<!-- MiDaS TFJS wrapper (community package) - used if available -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/midas"></script>
+<!-- Screenshot -->
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
+<style>
+  /* --- Neon / cyber style --- */
+  :root{
+    --bg:#05060a; --panel:rgba(255,255,255,0.04);
+    --neon1:#06b6d4; --neon2:#8b5cf6; --muted:rgba(255,255,255,0.6);
+  }
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#02030a,#061124);font-family:Inter,system-ui,Arial;color:#e6f7ff; -webkit-font-smoothing:antialiased;}
+  .app{display:flex;flex-direction:column;height:100vh;gap:8px}
+  header{padding:12px 16px;display:flex;align-items:center;gap:12px}
+  h1{margin:0;font-size:18px;letter-spacing:0.4px}
+  .main{flex:1;display:flex;gap:12px;padding:12px;box-sizing:border-box}
+  /* viewer */
+  .viewer{flex:1;position:relative;border-radius:14px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.03)}
+  video#cam{width:100%;height:100%;object-fit:cover;display:block}
+  canvas#overlay{position:absolute;left:0;top:0;pointer-events:none}
+  /* panel */
+  .panel{width:360px;background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));border-radius:12px;padding:12px;backdrop-filter: blur(6px);box-shadow:0 8px 30px rgba(11,17,30,0.6);border:1px solid rgba(255,255,255,0.03)}
+  .panel h3{margin:6px 0 10px 0;font-size:15px}
+  .row{display:flex;gap:8px}
+  input,select,button{width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:inherit;font-size:14px;box-sizing:border-box}
+  .muted{color:var(--muted);font-size:13px}
+  .tiny{font-size:12px;color:var(--muted)}
+  .btn{background:linear-gradient(90deg,var(--neon1),var(--neon2));border:none;color:#001;font-weight:700;cursor:pointer}
+  .outline{background:transparent;border:1px solid rgba(255,255,255,0.04)}
+  .tools{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .chip{padding:8px 10px;border-radius:999px;background:rgba(255,255,255,0.03);cursor:pointer;border:1px solid rgba(255,255,255,0.02);font-size:13px}
+  /* neon points */
+  .neon-point{position:absolute;width:18px;height:18px;border-radius:50%;box-shadow:0 0 12px 3px rgba(6,182,212,0.25),0 0 30px rgba(139,92,246,0.12);border:2px solid rgba(255,255,255,0.06);transform:translate(-50%,-50%);pointer-events:none}
+  /* loading overlay */
+  .loading{position:absolute;inset:0;background:linear-gradient(180deg,rgba(2,6,10,0.9),rgba(2,6,10,0.6));display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:9999}
+  .spinner{width:68px;height:68px;border-radius:50%;display:grid;place-items:center;box-shadow:0 0 30px rgba(6,182,212,0.12)}
+  .spinner:before{content:'';width:46px;height:46px;border-radius:50%;border:4px solid transparent;border-top-color:var(--neon1);animation:spin 1.2s linear infinite;box-shadow:0 0 26px var(--neon1)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .loader-text{font-size:15px;color:var(--muted)}
+  footer{padding:10px;text-align:center;font-size:12px;color:var(--muted)}
+  /* responsive */
+  @media(max-width:820px){ .panel{width:320px} .main{padding:8px} }
+  @media(max-width:640px){ .main{flex-direction:column} .panel{width:100%;order:2} .viewer{order:1;height:60vh} }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div style="width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,var(--neon1),var(--neon2));display:grid;place-items:center;color:#001;font-weight:700">AI</div>
+    <div>
+      <h1>Neon AI 3D Measurement — Tap to measure in 3D</h1>
+      <div class="tiny">MiDaS depth + calibration • multiple tools • export screenshot</div>
+    </div>
+  </header>
+
+  <div class="main">
+    <div class="viewer" id="viewer">
+      <video id="cam" autoplay playsinline plays="true"></video>
+      <canvas id="overlay"></canvas>
+
+      <!-- loading overlay -->
+      <div id="loading" class="loading" style="display:flex">
+        <div class="spinner"></div>
+        <div class="loader-text" id="loadingText">Starting camera & loading model…</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Tools & Calibration</h3>
+
+      <label class="tiny">Measurement mode</label>
+      <div class="tools" id="modeChips">
+        <div class="chip" data-mode="line">📏 Line</div>
+        <div class="chip" data-mode="poly">➿ Polyline</div>
+        <div class="chip" data-mode="area">🟦 Area (polygon)</div>
+        <div class="chip" data-mode="height">📐 Height</div>
+        <div class="chip" data-mode="volume">📦 Volume</div>
+        <div class="chip" data-mode="clear">🧽 Clear</div>
+      </div>
+
+      <label class="tiny" style="margin-top:10px">Calibration — choose an object (you can use any)</label>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="btn" id="calA">A: Credit Card (8.56 cm)</button>
+        <button class="btn outline" id="calB">B: A4 (29.7 cm)</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn outline" id="calC">C: Coin (2.3 cm)</button>
+        <button class="btn outline" id="calD">D: Custom</button>
+      </div>
+
+      <label class="tiny" style="margin-top:10px">Or manually enter calibration</label>
+      <input id="refReal" placeholder="Reference real length (cm) e.g. 8.56" />
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="chip" id="setRefFromTaps">Tap two points on reference</button>
+        <button class="chip" id="clearRef">Clear ref</button>
+      </div>
+
+      <hr style="border:none;height:1px;background:rgba(255,255,255,0.03);margin:12px 0" />
+
+      <label class="tiny">Focal length (optional, mm)</label>
+      <input id="focal" placeholder="e.g. 4.2 (leave blank for heuristic)" />
+
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn" id="exportBtn">📸 Export screenshot</button>
+        <button class="btn outline" id="helpBtn">❓ Help</button>
+      </div>
+
+      <hr style="border:none;height:1px;background:rgba(255,255,255,0.03);margin:12px 0" />
+      <div class="tiny">Status</div>
+      <div id="status" style="margin-top:6px;color:var(--muted)">initializing…</div>
+
+      <div style="margin-top:12px">
+        <div class="tiny">Measurements</div>
+        <div id="measurements" style="margin-top:6px;font-size:15px;color:var(--neon1)">No measurements yet</div>
+      </div>
+    </div>
+  </div>
+
+  <footer>Single-file • Save as <b>index.html</b> • Host on GitHub Pages</footer>
+</div>
+
+<script>
+/* =========================
+   Neon AI 3D Measurement
+   Single-file index.html
+   ========================= */
+
+const video = document.getElementById('cam');
+const canvas = document.getElementById('overlay');
+const ctx = canvas.getContext('2d');
+const loadingEl = document.getElementById('loading');
+const loadingText = document.getElementById('loadingText');
+const statusEl = document.getElementById('status');
+const measurementsEl = document.getElementById('measurements');
+const modeChips = document.getElementById('modeChips');
+const viewer = document.getElementById('viewer');
+
+let model = null;           // midas model if loaded
+let lastDepthMap = null;    // Float32Array depth for canvas sized frame
+let depthWidth = 0, depthHeight = 0;
+
+let points = [];            // current taps
+let mode = 'line';          // line | poly | area | height | volume
+let calibrating = false;
+let refRealCm = null;       // reference real length (cm)
+let refPx = null;           // pixel length on screen for reference scaling
+let scaleCmPerPx = null;    // computed scale (cm per pixel)
+let focalMm = null;         // optional focal length
+
+// Setup camera
+async function startCamera(){
+  loadingText.innerText = 'Requesting camera permission…';
+  try{
+    const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false });
+    video.srcObject = s;
+    await video.play();
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+    loadingText.innerText = 'Camera ready — loading model…';
+    status('Camera ready');
+  }catch(e){
+    alert('Camera permission required. Error: ' + e.message);
+    status('Camera error: ' + e.message);
+  }
+}
+
+function resizeCanvas(){
+  canvas.width = video.videoWidth || video.clientWidth;
+  canvas.height = video.videoHeight || video.clientHeight;
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
+}
+
+// Load MiDaS model (DPT_Large if available) with fallback to small
+async function loadDepthModel(){
+  loadingText.innerText = 'Loading MiDaS depth model (this may take a few seconds)…';
+  status('Loading depth model');
+  try{
+    // try DPT_Large if provided by library; else fallback to small
+    if(window.midas && midas.load){
+      // prefer DPT_Large for accuracy
+      try{
+        model = await midas.load({version:'DPT_Large'}); // accuracy boost
+      }catch(e){
+        model = await midas.load({version:'DPT_Hybrid'}); // fallback
+      }
+    } else {
+      model = null;
+    }
+    status('Depth model loaded');
+    loadingText.innerText = 'Model loaded — warming up…';
+    // warm up by running a single predict (if model)
+    if(model){
+      try {
+        await model.predict(video); // warmup
+      } catch(e) {
+        console.warn('Warmup predict failed', e);
+      }
+    }
+    loadingText.style.display = 'none';
+  }catch(err){
+    console.warn('Model load error', err);
+    status('Depth model failed to load — using reference calibration fallback');
+    loadingText.innerText = 'Model failed — continuing with reference calibration';
+    setTimeout(()=> loadingText.style.display = 'none', 1300);
+    model = null;
+  }
+}
+
+// run depth estimation periodically (throttled)
+let depthRunning = false;
+async function computeDepthMap(){
+  if(!model || depthRunning) return;
+  depthRunning = true;
+  try{
+    // model.predict returns a tf.Tensor or a Canvas depending on wrapper; handle generically
+    const out = await model.predict(video);
+    // Some wrappers return an ImageData/Canvas, others return tensor; convert to Float32 normalized map sized to overlay
+    if(out instanceof HTMLCanvasElement){
+      // draw onto an offscreen canvas and read pixels -> convert greys to depth floats (0..255)
+      depthWidth = canvas.width; depthHeight = canvas.height;
+      const tmp = document.createElement('canvas'); tmp.width = depthWidth; tmp.height = depthHeight;
+      const tctx = tmp.getContext('2d');
+      tctx.drawImage(out, 0, 0, depthWidth, depthHeight);
+      const id = tctx.getImageData(0,0,depthWidth,depthHeight).data;
+      // single-channel depth from R channel
+      const arr = new Float32Array(depthWidth*depthHeight);
+      for(let i=0, j=0;i<id.length;i+=4,j++){
+        arr[j] = id[i]; // R channel
+      }
+      lastDepthMap = {data:arr, width:depthWidth, height:depthHeight, min:Math.min(...arr), max:Math.max(...arr)};
+    } else {
+      // assume tensor-like -> convert & resize
+      // we use tf.tidy to avoid memory leaks
+      await tf.nextFrame();
+      const t = out; // often tf.Tensor
+      let tensor = t;
+      if(Array.isArray(t)) tensor = t[0];
+      try{
+        let resized = tf.image.resizeBilinear(tensor.expandDims(-1), [canvas.height, canvas.width]).squeeze();
+        const arr = await resized.data();
+        const f32 = Float32Array.from(arr);
+        lastDepthMap = {data:f32, width:canvas.width, height:canvas.height, min:Math.min(...f32), max:Math.max(...f32)};
+        resized.dispose && resized.dispose();
+      }catch(e){
+        console.warn('Depth tensor handling error', e);
+        lastDepthMap = null;
+      }
+    }
+  }catch(e){
+    console.warn('computeDepthMap error', e);
+    lastDepthMap = null;
+  } finally {
+    depthRunning = false;
+  }
+}
+
+// Depth value at pixel (x,y) -> returns normalized relative depth (higher = farther or nearer depending on model)
+function depthAt(x,y){
+  if(!lastDepthMap) return null;
+  const px = Math.min(Math.max(Math.round(x),0), lastDepthMap.width-1);
+  const py = Math.min(Math.max(Math.round(y),0), lastDepthMap.height-1);
+  return lastDepthMap.data[py * lastDepthMap.width + px];
+}
+
+// helpers
+function status(text){ statusEl.innerText = text; }
+function showMeasurement(text){ measurementsEl.innerHTML = text; }
+
+// drawing
+function drawOverlay(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  // optionally draw depth overlay (subtle)
+  if(lastDepthMap){
+    const w = lastDepthMap.width, h = lastDepthMap.height;
+    const img = ctx.createImageData(w,h);
+    // normalize
+    const min = lastDepthMap.min, max = lastDepthMap.max, r = Math.max(1e-6, max-min);
+    for(let i=0;i<lastDepthMap.data.length;i++){
+      let v = (lastDepthMap.data[i]-min)/r; // 0..1
+      // invert so nearer = brighter
+      v = 1 - v;
+      const c = Math.round(60 + v*180); // 60..240
+      img.data[i*4+0] = c;
+      img.data[i*4+1] = c;
+      img.data[i*4+2] = c;
+      img.data[i*4+3] = 40; // alpha
+    }
+    // put small canvas and scale to overlay size
+    const tmp = document.createElement('canvas'); tmp.width = w; tmp.height = h;
+    tmp.getContext('2d').putImageData(img,0,0);
+    ctx.drawImage(tmp,0,0,canvas.width,canvas.height);
+  }
+
+  // draw points & segments
+  ctx.lineWidth = 3;
+  for(let i=0;i<points.length;i++){
+    const p = points[i];
+    // neon circle
+    ctx.beginPath();
+    ctx.fillStyle = (i===0? 'rgba(139,92,246,0.95)' : 'rgba(6,182,212,0.95)');
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.arc(p.x,p.y,10,0,Math.PI*2);
+    ctx.fill();
+    ctx.stroke();
+    // index
+    ctx.font = '14px Inter, Arial';
+    ctx.fillStyle = '#001';
+    ctx.fillText(String(i+1), p.x-5, p.y+5);
+    // line to previous
+    if(i>0){
+      const prev = points[i-1];
+      ctx.beginPath();
+      ctx.moveTo(prev.x,prev.y);
+      ctx.lineTo(p.x,p.y);
+      ctx.strokeStyle = 'rgba(6,182,212,0.9)';
+      ctx.stroke();
+    }
+  }
+}
+
+// tapping / touch handler
+viewer.addEventListener('click', (ev)=>{
+  // compute canvas coords
+  const rect = canvas.getBoundingClientRect();
+  const x = (ev.clientX - rect.left) * (canvas.width / rect.width);
+  const y = (ev.clientY - rect.top) * (canvas.height / rect.height);
+  handleTap(x,y);
+});
+
+// also support touch (mobile)
+viewer.addEventListener('touchstart', (ev)=>{
+  const touch = ev.touches[0];
+  const rect = canvas.getBoundingClientRect();
+  const x = (touch.clientX - rect.left) * (canvas.width / rect.width);
+  const y = (touch.clientY - rect.top) * (canvas.height / rect.height);
+  handleTap(x,y);
+  ev.preventDefault();
+}, {passive:false});
+
+function handleTap(x,y){
+  if(calibrating){
+    // used for refPx: we collect two taps and measure pixel distance between them
+    points.push({x,y});
+    if(points.length >= 2 && calibrating==='ref'){
+      // compute refPx
+      const a = points[points.length-2], b = points[points.length-1];
+      const px = Math.hypot(a.x-b.x, a.y-b.y);
+      refPx = px;
+      computeScaleFromRef();
+      calibrating = false;
+      points = [];
+      status('Reference set: ' + refRealCm + ' cm = ' + refPx.toFixed(1) + ' px');
+      showMeasurement('Calibration complete — scale: ' + scaleCmPerPx.toFixed(4) + ' cm/px');
+    }
+    drawOverlay();
+    return;
+  }
+
+  if(mode === 'clear'){
+    points = [];
+    showMeasurement('Cleared');
+    drawOverlay();
+    return;
+  }
+
+  // normal measuring: add point
+  points.push({x,y});
+  drawOverlay();
+
+  // handle different modes
+  if(mode === 'line' && points.length >= 2) measureLine();
+  else if(mode === 'poly' && points.length >= 2) measurePolyline();
+  else if(mode === 'area' && points.length >= 3) measureArea();
+  else if(mode === 'height' && points.length >= 2) measureHeight();
+  else if(mode === 'volume' && points.length >= 4) measureVolume();
+}
+
+/* -------------------------
+   Calibration helpers
+   ------------------------- */
+function setPredefinedRef(type){
+  // A: Credit card width 8.56 cm (standard card width)
+  // B: A4 short side 21 cm or long side 29.7 cm — we choose long side 29.7
+  // C: Coin (example ~2.3 cm)
+  // D: custom (user enters value)
+  if(type === 'A'){ refRealCm = 8.56; status('Selected Credit Card (8.56 cm)'); }
+  else if(type === 'B'){ refRealCm = 29.7; status('Selected A4 (29.7 cm)'); }
+  else if(type === 'C'){ refRealCm = 2.3; status('Selected Coin (2.3 cm)'); }
+  else { refRealCm = null; status('Custom selected — enter value'); }
+  // instruct user to tap two points over the reference object
+  calibrating = 'ref';
+  points = [];
+  showMeasurement('Tap two points across the reference object (on-screen) to set calibration.');
+}
+
+// compute scaleCmPerPx using refRealCm and refPx
+function computeScaleFromRef(){
+  if(!refRealCm || !refPx) return null;
+  scaleCmPerPx = refRealCm / refPx;
+  return scaleCmPerPx;
+}
+
+/* -------------------------
+   Measurement primitives
+   ------------------------- */
+function measureLine(){
+  // Use depth map if present and calibration scale to compute 3D distance between last two points
+  const a = points[points.length-2], b = points[points.length-1];
+  let result = null;
+
+  // try depth + calibration
+  if(lastDepthMap && scaleCmPerPx){
+    const da = depthAt(a.x,a.y), db = depthAt(b.x,b.y);
+    // linear map from relative depth to approximate distance: compute mapping factor using reference
+    const mapped = mapRelativeDepthsToDistance(da, db);
+    if(mapped){
+      result = mapped;
+    }
+  }
+
+  // fallback: pixel-distance * scaleCmPerPx (2D distance)
+  if(!result && scaleCmPerPx){
+    const px = Math.hypot(a.x-b.x, a.y-b.y);
+    const cm = px * scaleCmPerPx;
+    showMeasurement(`2D distance (no depth): ${cm.toFixed(2)} cm`);
+  } else if(result){
+    showMeasurement(`3D distance: ${result.toFixed(2)} cm`);
+  } else {
+    showMeasurement('No calibration or depth available. Set a reference for best results.');
+  }
+}
+
+function measurePolyline(){
+  if(points.length < 2) return;
+  let pxSum = 0;
+  for(let i=1;i<points.length;i++){
+    pxSum += Math.hypot(points[i].x-points[i-1].x, points[i].y-points[i-1].y);
+  }
+  if(scaleCmPerPx){
+    showMeasurement(`Polyline ≈ ${(pxSum * scaleCmPerPx).toFixed(2)} cm`);
+  } else {
+    showMeasurement(`Polyline: ${pxSum.toFixed(1)} px (set calibration to convert)`);
+  }
+}
+
+function measureArea(){
+  if(points.length < 3) return;
+  // polygon area in pixel space (shoelace)
+  let areaPx = 0;
+  for(let i=0;i<points.length;i++){
+    const a = points[i];
+    const b = points[(i+1)%points.length];
+    areaPx += (a.x*b.y - b.x*a.y);
+  }
+  areaPx = Math.abs(areaPx)/2;
+  if(scaleCmPerPx){
+    const cm2 = areaPx * (scaleCmPerPx**2);
+    showMeasurement(`Area ≈ ${cm2.toFixed(2)} cm²`);
+  } else {
+    showMeasurement(`Area: ${areaPx.toFixed(0)} px² (set calibration to convert)`);
+  }
+}
+
+function measureHeight(){
+  if(points.length < 2) return;
+  // assume first two taps: bottom and top of object. Use depth + calibration to estimate vertical size
+  const a = points[points.length-2], b = points[points.length-1];
+  if(lastDepthMap && scaleCmPerPx){
+    // compute 3D coords and vertical difference
+    const coords = ptsTo3D([a,b]);
+    if(coords){
+      const dz = Math.abs(coords[0].Zcm - coords[1].Zcm);
+      const dy = Math.abs(coords[0].Ycm - coords[1].Ycm);
+      // height approx is sqrt(dy^2 + dz^2) but typically vertical dimension is Y
+      const height = Math.hypot(coords[0].Xcm - coords[1].Xcm, coords[0].Ycm - coords[1].Ycm, coords[0].Zcm - coords[1].Zcm);
+      showMeasurement(`Estimated height: ${height.toFixed(2)} cm`);
+      return;
+    }
+  }
+  // fallback 2D pixel->cm using scale
+  const px = Math.hypot(a.x-b.x, a.y-b.y);
+  i
